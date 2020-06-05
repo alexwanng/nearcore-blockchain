@@ -1,25 +1,26 @@
 use std::ffi::c_void;
 
-use near_vm_logic::{VMLogic, VMLogicError};
-use wasmer_runtime::memory::Memory as WasmerMemory;
-use wasmer_runtime::{func, imports, Ctx, ImportObject};
-use wasmtime::Memory as WasmtimeMemory;
-use wasmtime::Store as WasmtimeStore;
-use wasmtime::Linker as WasmtimeLinker;
+use near_vm_logic::VMLogic;
 
-type Result<T> = ::std::result::Result<T, VMLogicError>;
 struct ImportReference(*mut c_void);
 unsafe impl Send for ImportReference {}
 unsafe impl Sync for ImportReference {}
+
+macro_rules! rust2wasm {
+    (u64) => { i64 };
+    (u32) => { i32 };
+    ( () ) => { () };
+}
 
 macro_rules! wrapped_imports {
         ( $( $func:ident < [ $( $arg_name:ident : $arg_type:ident ),* ] -> [ $( $returns:ident ),* ] >, )* ) => {
             pub mod wasmer_ext {
             use near_vm_logic::VMLogic;
             use wasmer_runtime::Ctx;
+            type VMResult<T> = ::std::result::Result<T, near_vm_logic::VMLogicError>;
             $(
                 #[allow(unused_parens)]
-                fn $func( ctx: &mut Ctx, $( $arg_name: $arg_type ),* ) -> Result<($( $returns ),*)> {
+                pub fn $func( ctx: &mut Ctx, $( $arg_name: $arg_type ),* ) -> VMResult<($( $returns ),*)> {
                     let logic: &mut VMLogic<'_> = unsafe { &mut *(ctx.data as *mut VMLogic<'_>) };
                     logic.$func( $( $arg_name, )* )
                 }
@@ -27,19 +28,29 @@ macro_rules! wrapped_imports {
             }
 
             pub mod wasmtime_ext {
+            use near_vm_logic::VMLogic;
+            use wasmtime::Caller;
+            use wasmtime::Engine;
+            use crate::wasmtime_runner::NearEngine;
+            //type VMResult<T> = ::std::result::Result<T, near_vm_logic::VMLogicError>;
             $(
                 #[allow(unused_parens)]
-                fn $func($( $arg_name: $arg_type ),* ) -> Result<($( $returns ),*)> {
-                    //let logic: &mut VMLogic<'_> = unsafe { &mut *(ctx.data as *mut VMLogic<'_>) };
-                    //logic.$func( $( $arg_name, )* )
+                pub fn $func( ctx: Caller<'_>, $( $arg_name: rust2wasm!($arg_type) ),* ) -> ($( rust2wasm!($returns) ),*) {
+                    let store = ctx.store();
+                    let engine = store.engine();
+                    let data = unsafe { (*(std::mem::transmute::<*const Engine, *const NearEngine>(engine))).ctx };
+                    let logic: &mut VMLogic<'_> = unsafe { &mut *(data as *mut VMLogic<'_>) };
+                    let result = logic.$func( $( $arg_name as $arg_type, )* );
+                    result.unwrap() as ($( rust2wasm!($returns) ),*)
                 }
             )*
             }
 
-            pub(crate) fn build_wasmer(memory: WasmerMemory, logic: &mut VMLogic<'_>) -> ImportObject {
+            pub(crate) fn build_wasmer(memory: wasmer_runtime::memory::Memory, logic: &mut VMLogic<'_>) ->
+                wasmer_runtime::ImportObject {
                 let raw_ptr = logic as *mut _ as *mut c_void;
                 let import_reference = ImportReference(raw_ptr);
-                imports! {
+                wasmer_runtime::imports! {
                     move || {
                         let dtor = (|_: *mut c_void| {}) as fn(*mut c_void);
                         (import_reference.0, dtor)
@@ -47,19 +58,17 @@ macro_rules! wrapped_imports {
                     "env" => {
                         "memory" => memory,
                         $(
-                            stringify!($func) => func!(wasmer_ext::$func),
+                            stringify!($func) => wasmer_runtime::func!(wasmer_ext::$func),
                         )*
                     },
                 }
             }
 
             pub(crate) fn link_wasmtime(
-                    store: &WasmtimeStore,
-                    linker: &mut WasmtimeLinker,
-                    memory: WasmtimeMemory,
-                    logic: &mut VMLogic<'_>
+                    linker: &mut wasmtime::Linker,
+                    memory: wasmtime::Memory
              ) {
-                //linker.define("host", "memory", WasmtimeExterm::from(memory));
+                linker.define("host", "memory", memory);
                 $(
                    linker.func("host", stringify!($func), wasmtime_ext::$func);
                   )*

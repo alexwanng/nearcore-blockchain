@@ -1,11 +1,11 @@
 use std::str;
-use crate::errors::IntoVMError;
-use crate::{cache, imports, };
+use crate::{imports, };
 use near_runtime_fees::RuntimeFeesConfig;
-use near_vm_errors::{FunctionCallError, MethodResolveError, VMError};
+use near_vm_errors::VMError;
 use near_vm_logic::types::PromiseResult;
 use near_vm_logic::{External, VMConfig, VMContext, VMLogic, VMOutcome, MemoryLike};
-use wasmtime::{Module, Store, MemoryType, Limits, Memory, Instance, Extern, Linker};
+use wasmtime::{Module, Store, MemoryType, Limits, Memory, Linker, Engine};
+use std::ffi::c_void;
 
 pub struct WasmtimeMemory(Memory);
 
@@ -64,8 +64,22 @@ impl MemoryLike for WasmtimeMemory {
     }
 }
 
+pub struct NearEngine {
+    pub engine: Engine,
+    pub ctx: *mut c_void,
+}
+
+impl Default for NearEngine {
+    fn default() -> Self {
+        Self {
+            engine: Engine::default(),
+            ctx: 0 as *mut c_void,
+        }
+    }
+}
+
 pub fn run_wasmtime<'a>(
-    code_hash: Vec<u8>,
+    _code_hash: Vec<u8>,
     code: &[u8],
     method_name: &[u8],
     ext: &mut dyn External,
@@ -74,26 +88,29 @@ pub fn run_wasmtime<'a>(
     fees_config: &'a RuntimeFeesConfig,
     promise_results: &'a [PromiseResult],
 ) -> (Option<VMOutcome>, Option<VMError>) {
-    let store = Store::default();
+    println!("run wastime!");
+    let mut near_engine = NearEngine::default();
+    let engine = near_engine.engine;
+    let store = Store::new(&engine);
     let mut memory =
         WasmtimeMemory::new(
             &store,
             wasm_config.limit_config.initial_memory_pages,
             wasm_config.limit_config.max_memory_pages).unwrap();
-    let module = Module::new(&store, code).unwrap();
+    let module = Module::new(&engine, code).unwrap();
     // Note that we don't clone the actual backing memory, just increase the RC.
-    let mut memory_copy = memory.clone();
+    let memory_copy = memory.clone();
     let mut linker = Linker::new(&store);
     let mut logic =
         VMLogic::new(ext, context, wasm_config, fees_config, promise_results, &mut memory);
-    imports::link_wasmtime(
-        &store, &linker, memory_copy, &mut logic);
+    // TODO: make it properly typed?
+    near_engine.ctx = &mut logic as *mut _ as *mut c_void ;
+    imports::link_wasmtime(&mut linker, memory_copy);
     match linker.instantiate(&module) {
         Ok(instance) =>
             match instance.get_func(str::from_utf8(method_name).unwrap()) {
                 Some(func) => {
-                    let run = func.get0::<()>();
-                    run;
+                    func.get0::<i32>();
                     (Some(logic.outcome()), None)
                 },
                 None => panic!("No function"),
