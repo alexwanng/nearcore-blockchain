@@ -4,7 +4,18 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize)]
+pub enum VMKind {
+    /// Wasmer VM.
+    Wasmer,
+    /// Wasmtime VM.
+    Wasmtime,
+}
+
+#[derive(Clone, Debug, Hash, Serialize, Deserialize)]
 pub struct VMConfig {
+    /// Virtual machine kind.
+    pub vm_kind: VMKind,
+
     /// Costs for runtime externals
     pub ext_costs: ExtCostsConfig,
 
@@ -79,6 +90,7 @@ pub struct VMLimitConfig {
 impl Default for VMConfig {
     fn default() -> VMConfig {
         VMConfig {
+            vm_kind: VMKind::Wasmtime,
             ext_costs: ExtCostsConfig::default(),
             grow_mem_cost: 1,
             regular_op_cost: 3856371,
@@ -98,6 +110,7 @@ impl VMConfig {
 
     pub fn free() -> Self {
         Self {
+            vm_kind: VMKind::Wasmer,
             ext_costs: ExtCostsConfig::free(),
             grow_mem_cost: 0,
             regular_op_cost: 0,
