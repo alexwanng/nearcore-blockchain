@@ -36,6 +36,7 @@ macro_rules! wrapped_imports {
             $(
                 #[allow(unused_parens)]
                 pub fn $func( ctx: Caller<'_>, $( $arg_name: rust2wasm!($arg_type) ),* ) -> ($( rust2wasm!($returns) ),*) {
+                    println!("call back {}", stringify!($func));
                     let store = ctx.store();
                     let engine = store.engine();
                     let data = unsafe { (*(std::mem::transmute::<*const Engine, *const NearEngine>(engine))).ctx };
@@ -68,9 +69,11 @@ macro_rules! wrapped_imports {
                     linker: &mut wasmtime::Linker,
                     memory: wasmtime::Memory
              ) {
-                linker.define("host", "memory", memory);
+                linker.define("host", "memory", memory).
+                    expect("cannot define memory");
                 $(
-                   linker.func("host", stringify!($func), wasmtime_ext::$func);
+                   linker.func("host", stringify!($func), wasmtime_ext::$func).
+                    expect("cannot link external");
                   )*
             }
         }

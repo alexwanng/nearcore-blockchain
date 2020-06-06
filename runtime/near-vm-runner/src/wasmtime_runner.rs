@@ -1,11 +1,13 @@
 use std::str;
 use crate::{imports, };
 use near_runtime_fees::RuntimeFeesConfig;
-use near_vm_errors::VMError;
+use near_vm_errors::{VMError, FunctionCallError, MethodResolveError};
 use near_vm_logic::types::PromiseResult;
 use near_vm_logic::{External, VMConfig, VMContext, VMLogic, VMOutcome, MemoryLike};
 use wasmtime::{Module, Store, MemoryType, Limits, Memory, Linker, Engine};
 use std::ffi::c_void;
+use near_vm_errors::FunctionCallError::LinkError;
+use crate::errors::IntoVMError;
 
 pub struct WasmtimeMemory(Memory);
 
@@ -66,6 +68,7 @@ impl MemoryLike for WasmtimeMemory {
 
 pub struct NearEngine {
     pub engine: Engine,
+    // TODO: make it properly typed as VMLogic?
     pub ctx: *mut c_void,
 }
 
@@ -75,6 +78,20 @@ impl Default for NearEngine {
             engine: Engine::default(),
             ctx: 0 as *mut c_void,
         }
+    }
+}
+
+impl IntoVMError for anyhow::Error {
+    fn into_vm_error(self) -> VMError {
+        // TODO: incorrect
+        VMError::FunctionCallError(LinkError { msg: "unknown any".to_string() })
+    }
+}
+
+impl IntoVMError for wasmtime::Trap {
+    fn into_vm_error(self) -> VMError {
+        // TODO: incorrect
+        VMError::FunctionCallError(LinkError { msg: "unknown trap".to_string() })
     }
 }
 
@@ -88,7 +105,6 @@ pub fn run_wasmtime<'a>(
     fees_config: &'a RuntimeFeesConfig,
     promise_results: &'a [PromiseResult],
 ) -> (Option<VMOutcome>, Option<VMError>) {
-    println!("run wastime!");
     let mut near_engine = NearEngine::default();
     let engine = near_engine.engine;
     let store = Store::new(&engine);
@@ -103,18 +119,29 @@ pub fn run_wasmtime<'a>(
     let mut linker = Linker::new(&store);
     let mut logic =
         VMLogic::new(ext, context, wasm_config, fees_config, promise_results, &mut memory);
-    // TODO: make it properly typed?
     near_engine.ctx = &mut logic as *mut _ as *mut c_void ;
     imports::link_wasmtime(&mut linker, memory_copy);
     match linker.instantiate(&module) {
         Ok(instance) =>
             match instance.get_func(str::from_utf8(method_name).unwrap()) {
                 Some(func) => {
-                    func.get0::<i32>();
-                    (Some(logic.outcome()), None)
+                    match func.get0::<()>() {
+                        Ok(run) => {
+                            match run() {
+                                Ok(_) => (Some(logic.outcome()), None),
+                                Err(err) => (Some(logic.outcome()), Some(err.into_vm_error())),
+                            }
+                        }
+                        Err(err) => (Some(logic.outcome()), Some(err.into_vm_error())),
+                    }
                 },
-                None => panic!("No function"),
+                None => (
+                    None,
+                    Some(VMError::FunctionCallError(FunctionCallError::MethodResolveError(
+                        MethodResolveError::MethodUTF8Error,
+                    ))),
+                )
             },
-        Err(err) => panic!("Error"),
+        Err(err) => (Some(logic.outcome()), Some(err.into_vm_error())),
     }
 }

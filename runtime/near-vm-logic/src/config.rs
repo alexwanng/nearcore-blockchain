@@ -90,7 +90,7 @@ pub struct VMLimitConfig {
 impl Default for VMConfig {
     fn default() -> VMConfig {
         VMConfig {
-            vm_kind: VMKind::Wasmer,
+            vm_kind: VMKind::Wasmtime,
             ext_costs: ExtCostsConfig::default(),
             grow_mem_cost: 1,
             regular_op_cost: 3856371,
