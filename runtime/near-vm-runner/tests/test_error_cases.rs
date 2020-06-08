@@ -429,3 +429,29 @@ fn test_bad_many_imports() {
         panic!(result.1);
     }
 }
+
+fn external_call_contract() -> Vec<u8> {
+    wabt::wat2wasm(
+        r#"
+            (module
+              (type (;0;) (func))
+              (type (;1;) (func (result i64)))
+              (import "env" "prepaid_gas" (func (;1;) (type 1)))
+              (export "hello" (func 0))
+              (func (;0;) (type 0) (call 1))
+            )"#,
+    )
+        .unwrap()
+}
+
+#[test]
+fn test_external_call() {
+    assert_eq!(
+        make_simple_contract_call_with_gas(&external_call_contract(), b"hello", 1000000000000),
+        (
+            Some(vm_outcome_with_gas(10000000000)),
+            None
+        )
+    );
+}
+

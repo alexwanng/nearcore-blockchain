@@ -69,10 +69,10 @@ macro_rules! wrapped_imports {
                     linker: &mut wasmtime::Linker,
                     memory: wasmtime::Memory
              ) {
-                linker.define("host", "memory", memory).
+                linker.define("env", "memory", memory).
                     expect("cannot define memory");
                 $(
-                   linker.func("host", stringify!($func), wasmtime_ext::$func).
+                   linker.func("env", stringify!($func), wasmtime_ext::$func).
                     expect("cannot link external");
                   )*
             }
